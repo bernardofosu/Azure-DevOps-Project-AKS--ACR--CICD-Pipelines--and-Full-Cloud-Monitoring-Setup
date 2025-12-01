@@ -1,0 +1,141 @@
+trigger:
+  - none
+
+pool:
+  name: nakodtech
+  demands:
+    - agent.name -equals Agent-1
+
+stages:
+  - stage: compile
+    displayName: "Maven Compile"
+    jobs:
+      - job: maven_compile
+        steps:
+          - task: Maven@4
+            inputs:
+              azureSubscription: "svcp-conn"
+              mavenPomFile: "pom.xml"
+              goals: "compile"
+              publishJUnitResults: true
+              testResultsFiles: "**/surefire-reports/TEST-*.xml"
+              javaHomeOption: "JDKVersion"
+              mavenVersionOption: "Default"
+              mavenAuthenticateFeed: false
+              effectivePomSkip: false
+              sonarQubeRunAnalysis: false
+
+  - stage: test
+    displayName: "Maven Test"
+    jobs:
+      - job: maven_test
+        steps:
+          - task: Maven@4
+            inputs:
+              azureSubscription: "svcp-conn"
+              mavenPomFile: "pom.xml"
+              goals: "test"
+              publishJUnitResults: true
+              testResultsFiles: "**/surefire-reports/TEST-*.xml"
+              javaHomeOption: "JDKVersion"
+              mavenVersionOption: "Default"
+              mavenAuthenticateFeed: false
+              effectivePomSkip: false
+              sonarQubeRunAnalysis: false
+
+  - stage: trivy_fs_scan
+    displayName: "Trivy Fs Scan"
+    jobs:
+      - job: trivy_scan_job
+        displayName: "Trivy Fs Scan Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - task: CmdLine@2
+            inputs:
+              script: "trivy fs --format table -o trivy-fs-report.txt ."
+
+  - stage: sonarqube_scan
+    displayName: "Sonarqube Scan"
+    jobs:
+      - job: sonar_scan_job
+        displayName: "Sonar Scan Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - task: SonarQubePrepare@7
+            inputs:
+              SonarQube: "sonarqube-conn"
+              scannerMode: "cli"
+              configMode: "manual"
+              cliProjectKey: "bankapp"
+              cliProjectName: "bankapp for sonar"
+              cliSources: "."
+              extraProperties: |
+                # Additional properties that will be passed to the scanner, 
+                # Put one key=value per line, example:
+                # sonar.exclusions=**/*.bin
+                sonar.java.libraries=.
+                sonar.java.binaries=target/classes
+
+          - task: SonarQubeAnalyze@7
+            inputs:
+              jdkversion: "JAVA_HOME"
+
+  - stage: build
+    displayName: "build stage"
+    jobs:
+      - job: build_job
+        displayName: "Build or Package Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - script: mvn package
+            displayName: "package app"
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: "target"
+              artifactName: "drop"
+            displayName: "Publish JAR Artifact"
+
+  - stage: docker_build_push
+    displayName: "Docker Build Push"
+    jobs:
+      - job: build_push_job
+        displayName: "Build and Push Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              artifactName: "drop"
+              downloadPath: "$(Build.SourcesDirectory)"
+            displayName: "Download JAR Artifact"
+
+          - task: Docker@2
+            inputs:
+              containerRegistry: "docker-conn"
+              repository: "bofosu1/bankapp2"
+              command: "buildAndPush"
+              Dockerfile: "**/Dockerfile"
+
+  - stage: trivy_image_scan
+    displayName: "Run Trivy Image Scan"
+    jobs:
+      - job: trivy_image_scan_job
+        displayName: "Trivy Image Scan Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - script: "trivy image --format table -o trivy-image-report.txt bofosu1/bankapp2:18"
+            displayName: "Trivy Image Scan Job"
