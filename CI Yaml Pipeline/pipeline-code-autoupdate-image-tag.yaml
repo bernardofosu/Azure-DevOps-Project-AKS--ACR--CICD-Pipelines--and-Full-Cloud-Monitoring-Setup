@@ -7,6 +7,9 @@ pool:
     - agent.name -equals Agent-1
 
 stages:
+  # -------------------------------
+  # 1️⃣ Maven Compile
+  # -------------------------------
   - stage: compile
     displayName: "Maven Compile"
     jobs:
@@ -25,6 +28,9 @@ stages:
               effectivePomSkip: false
               sonarQubeRunAnalysis: false
 
+  # -------------------------------
+  # 2️⃣ Maven Test
+  # -------------------------------
   - stage: test
     displayName: "Maven Test"
     jobs:
@@ -43,6 +49,9 @@ stages:
               effectivePomSkip: false
               sonarQubeRunAnalysis: false
 
+  # -------------------------------
+  # 3️⃣ Trivy FS Scan
+  # -------------------------------
   - stage: trivy_fs_scan
     displayName: "Trivy Fs Scan"
     jobs:
@@ -50,13 +59,14 @@ stages:
         displayName: "Trivy Fs Scan Job"
         pool:
           name: nakodtech
-          demands:
-            - agent.name -equals Agent-1
         steps:
           - task: CmdLine@2
             inputs:
               script: "trivy fs --format table -o trivy-fs-report.txt ."
 
+  # -------------------------------
+  # 4️⃣ SonarQube Scan
+  # -------------------------------
   - stage: sonarqube_scan
     displayName: "Sonarqube Scan"
     jobs:
@@ -64,8 +74,6 @@ stages:
         displayName: "Sonar Scan Job"
         pool:
           name: nakodtech
-          demands:
-            - agent.name -equals Agent-1
         steps:
           - task: SonarQubePrepare@7
             inputs:
@@ -76,9 +84,6 @@ stages:
               cliProjectName: "bankapp for sonar"
               cliSources: "."
               extraProperties: |
-                # Additional properties that will be passed to the scanner, 
-                # Put one key=value per line, example:
-                # sonar.exclusions=**/*.bin
                 sonar.java.libraries=.
                 sonar.java.binaries=.
 
@@ -86,24 +91,29 @@ stages:
             inputs:
               jdkversion: "JAVA_HOME"
 
+  # -------------------------------
+  # 5️⃣ Build Artifact
+  # -------------------------------
   - stage: build
-    displayName: "build stage"
+    displayName: "Build Stage"
     jobs:
       - job: build_job
         displayName: "Build or Package Job"
         pool:
           name: nakodtech
-          demands:
-            - agent.name -equals Agent-1
         steps:
           - script: mvn package
             displayName: "package app"
+
           - task: PublishBuildArtifacts@1
             inputs:
               pathToPublish: "target"
               artifactName: "drop"
             displayName: "Publish JAR Artifact"
 
+  # -------------------------------
+  # 6️⃣ Docker Build + Push
+  # -------------------------------
   - stage: docker_build_push
     displayName: "Docker Build Push"
     jobs:
@@ -111,14 +121,11 @@ stages:
         displayName: "Build and Push Job"
         pool:
           name: nakodtech
-          demands:
-            - agent.name -equals Agent-1
         steps:
           - task: DownloadBuildArtifacts@0
             inputs:
               artifactName: "drop"
               downloadPath: "$(Build.SourcesDirectory)"
-            displayName: "Download JAR Artifact"
 
           - task: Docker@2
             inputs:
@@ -126,7 +133,12 @@ stages:
               repository: "bofosu1/bankapp2"
               command: "buildAndPush"
               Dockerfile: "**/Dockerfile"
+              tags: |
+                $(Build.BuildId)
 
+  # -------------------------------
+  # 7️⃣ Trivy Image Scan
+  # -------------------------------
   - stage: trivy_image_scan
     displayName: "Run Trivy Image Scan"
     jobs:
@@ -134,8 +146,50 @@ stages:
         displayName: "Trivy Image Scan Job"
         pool:
           name: nakodtech
-          demands:
-            - agent.name -equals Agent-1
         steps:
-          - script: "trivy image --format table -o trivy-image-report.txt bofosu1/bankapp2:18"
-            displayName: "Trivy Image Scan Job"
+          - script: "trivy image --format table -o trivy-image-report.txt bofosu1/bankapp2:$(Build.BuildId)"
+
+  # -------------------------------
+  # 8️⃣ FINAL CI STAGE — Update YAML With New Image Tag
+  # -------------------------------
+  - stage: update_yaml
+    displayName: "Update YAML With New Image Tag"
+    jobs:
+      - job: update_yaml_job
+        displayName: "Commit YAML Change to Repo"
+        pool:
+          name: nakodtech
+
+        steps:
+          # Required for git push permission to work
+          - checkout: self
+            persistCredentials: true
+            clean: true
+            fetchDepth: 0
+
+          - script: |
+              echo "=== Updating deployment YAML with new image tag ==="
+
+              git config user.email "pipeline@devops.com"
+              git config user.name "Azure DevOps Pipeline"
+
+              echo "Fetching latest main branch..."
+              git fetch origin
+              git checkout main
+              git pull origin main --no-edit
+
+              # Update the image tag based on Build ID
+              sed -i "s|image: bofosu1/bankapp2:.*|image: bofosu1/bankapp2:$(Build.BuildId)|" deployment-service.yaml
+
+              echo "Updated YAML content:"
+              cat deployment-service.yaml
+
+              echo "Staging and committing..."
+              git add deployment-service.yaml
+              git commit -m "Auto-update image tag to $(Build.BuildId)" || echo "No changes to commit"
+
+              echo "Pushing updated file..."
+              git push origin main
+            displayName: "Update YAML and Commit to Repo"
+            env:
+              System.AccessToken: $(System.AccessToken)

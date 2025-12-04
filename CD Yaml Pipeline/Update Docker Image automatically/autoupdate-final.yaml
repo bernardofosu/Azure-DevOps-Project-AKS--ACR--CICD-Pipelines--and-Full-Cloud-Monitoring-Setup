@@ -57,6 +57,24 @@ stages:
             inputs:
               script: "trivy fs --format table -o trivy-fs-report.txt ."
 
+  - stage: build
+    displayName: "build stage"
+    jobs:
+      - job: build_job
+        displayName: "Build or Package Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - script: mvn package
+            displayName: "package app"
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: "target"
+              artifactName: "drop"
+            displayName: "Publish JAR Artifact"
+
   - stage: sonarqube_scan
     displayName: "Sonarqube Scan"
     jobs:
@@ -81,28 +99,9 @@ stages:
                 # sonar.exclusions=**/*.bin
                 sonar.java.libraries=.
                 sonar.java.binaries=.
-
           - task: SonarQubeAnalyze@7
             inputs:
               jdkversion: "JAVA_HOME"
-
-  - stage: build
-    displayName: "build stage"
-    jobs:
-      - job: build_job
-        displayName: "Build or Package Job"
-        pool:
-          name: nakodtech
-          demands:
-            - agent.name -equals Agent-1
-        steps:
-          - script: mvn package
-            displayName: "package app"
-          - task: PublishBuildArtifacts@1
-            inputs:
-              pathToPublish: "target"
-              artifactName: "drop"
-            displayName: "Publish JAR Artifact"
 
   - stage: docker_build_push
     displayName: "Docker Build Push"
@@ -126,6 +125,8 @@ stages:
               repository: "bofosu1/bankapp2"
               command: "buildAndPush"
               Dockerfile: "**/Dockerfile"
+              tags: |
+                $(Build.BuildId)
 
   - stage: trivy_image_scan
     displayName: "Run Trivy Image Scan"
@@ -139,3 +140,66 @@ stages:
         steps:
           - script: "trivy image --format table -o trivy-image-report.txt bofosu1/bankapp2:18"
             displayName: "Trivy Image Scan Job"
+
+  - stage: deploy_to_k8
+    displayName: "Deploy To K8"
+    jobs:
+      - job: deploy_k8_job
+        displayName: "Deploy To K8 Job"
+
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+
+        steps:
+          # Required for git push to work
+          - checkout: self
+            persistCredentials: true
+            clean: true
+            fetchDepth: 0
+
+          - task: KubectlInstaller@0
+            inputs:
+              kubectlVersion: "latest"
+
+          # 🔥 Update YAML with NEW Docker image tag
+          - script: |
+              echo "=== Updating deployment YAML with new image tag ==="
+
+              git config user.email "pipeline@devops.com"
+              git config user.name "Azure DevOps Pipeline"
+
+              echo "Fetching latest main branch..."
+              git fetch origin
+              git checkout main
+              git pull origin main --no-edit
+
+              # Update image tag: replace everything after the colon
+              sed -i "s|image: bofosu1/bankapp2:.*|image: bofosu1/bankapp2:$(Build.BuildId)|" deployment-service.yaml
+
+              echo "Updated YAML content:"
+              cat deployment-service.yaml
+
+              echo "Staging and committing changes..."
+              git add deployment-service.yaml
+              git commit -m "Auto-update image tag to $(Build.BuildId)" || echo "No changes to commit"
+
+              echo "Pushing updated YAML back to repo..."
+              git push origin main
+            displayName: "Update YAML and Commit to Repo"
+            env:
+              System.AccessToken: $(System.AccessToken)
+
+          # 🚀 Apply latest deployment to AKS
+          - task: Kubernetes@1
+            inputs:
+              connectionType: "Kubernetes Service Connection"
+              kubernetesServiceEndpoint: "k8-svc-conn"
+              namespace: "default"
+              command: "apply"
+              useConfigurationFile: true
+              configuration: "deployment-service.yaml"
+              secretType: "dockerRegistry"
+              containerRegistryType: "Container Registry"
+              dockerRegistryEndpoint: "docker-conn"

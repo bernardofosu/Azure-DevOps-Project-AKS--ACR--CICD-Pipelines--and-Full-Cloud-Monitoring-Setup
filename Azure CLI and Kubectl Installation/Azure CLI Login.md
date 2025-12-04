@@ -30,7 +30,7 @@ Normal login fails on:
 
 If you see messages like:
 
-```
+```sh
 Operation not supported
 Failed to open browser
 ```
@@ -51,9 +51,18 @@ az login --use-device-code
 
 You will see:
 
-```
+```sh
 To sign in, use a web browser to open https://microsoft.com/devicelogin
-Enter the code: ABCD-1234
+Enter the code: EX9LXCVWW
+```
+
+```sh
+[Announcements]
+With the new Azure CLI login experience, you can select the subscription you want to use more easily. Learn more about it and its configuration at https://go.microsoft.com/fwlink/?linkid=2271236
+
+If you encounter any problem, please open an issue at https://aka.ms/azclibug
+
+[Warning] The login output has been updated. Please be aware that it no longer displays the full list of available subscriptions by default.
 ```
 
 ### Steps:
@@ -135,7 +144,10 @@ Verify:
 kubectl get nodes
 ```
 
----
+````sh
+ubuntu@ip-172-31-19-140:~$ az aks get-credentials --resource-group k8-rg --name azuredevops-k8 --overwrite-existing
+Merged "azuredevops-k8" as current context in /home/ubuntu/.kube/config
+```
 
 # 🔗 8. Connect to Your AKS Cluster (Portal + CLI)
 
@@ -160,7 +172,7 @@ You will see commands like:
 ```bash
 az account set --subscription <subscription-id>
 az aks get-credentials --resource-group <resource-group> --name <cluster-name>
-```
+````
 
 ## **📥 Step 3 — Download Cluster Credentials**
 
