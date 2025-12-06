@@ -1,0 +1,133 @@
+# Starter pipeline
+trigger:
+  - none
+
+pool:
+  name: nakodtech
+  demands:
+    - agent.name -equals Agent-1
+
+variables:
+  MAVEN_TOKEN: $(System.AccessToken)
+
+stages:
+  # -----------------------------
+  # 1. Compile Stage
+  # -----------------------------
+  - stage: compile
+    displayName: "Maven Compile"
+    jobs:
+      - job: maven_compile
+        steps:
+          - task: Maven@4
+            inputs:
+              azureSubscription: "svcp-conn"
+              mavenPomFile: "pom.xml"
+              goals: "compile"
+              publishJUnitResults: true
+              testResultsFiles: "**/surefire-reports/TEST-*.xml"
+              javaHomeOption: "JDKVersion"
+              mavenVersionOption: "Default"
+              mavenAuthenticateFeed: false
+              effectivePomSkip: false
+              sonarQubeRunAnalysis: false
+
+  # -----------------------------
+  # 2. Test Stage
+  # -----------------------------
+  - stage: test
+    displayName: "Maven Test"
+    jobs:
+      - job: maven_test
+        steps:
+          - task: Maven@4
+            inputs:
+              azureSubscription: "svcp-conn"
+              mavenPomFile: "pom.xml"
+              goals: "test"
+              publishJUnitResults: true
+              testResultsFiles: "**/surefire-reports/TEST-*.xml"
+              javaHomeOption: "JDKVersion"
+              mavenVersionOption: "Default"
+              mavenAuthenticateFeed: false
+              effectivePomSkip: false
+              sonarQubeRunAnalysis: false
+
+  # -----------------------------
+  # 3. Trivy FS Scan Stage
+  # -----------------------------
+  - stage: trivy_fs_scan
+    displayName: "Trivy Fs Scan"
+    jobs:
+      - job: trivy_scan_job
+        displayName: "Trivy Fs Scan Job"
+        steps:
+          - task: CmdLine@2
+            inputs:
+              script: "trivy fs --format table -o trivy-fs-report.txt ."
+
+  # -----------------------------
+  # 4. Build Stage
+  # -----------------------------
+  - stage: build
+    displayName: "Build Jar Stage"
+    jobs:
+      - job: build_job
+        displayName: "Build or Package Job"
+        steps:
+          - script: mvn package
+            displayName: "Package App"
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: "target"
+              artifactName: "drop"
+            displayName: "Publish JAR Artifact"
+
+  # -----------------------------
+  # 5. Publish Artifacts Stage
+  # -----------------------------
+  - stage: Publish_artifacts
+    displayName: "Publish_Build_Artifacts"
+
+    jobs:
+      - job: publish_artifacts
+        steps:
+          # 1. Authenticate to Azure Artifacts
+          - script: |
+              mkdir -p ~/.m2
+              cat > ~/.m2/settings.xml <<EOF
+              <settings>
+                <servers>
+                  <server>
+                    <id>AzureDevOps-Feed</id>
+                    <username>AzureDevOps</username>
+                    <password>${MAVEN_TOKEN}</password>
+                  </server>
+                </servers>
+              </settings>
+              EOF
+            displayName: "Create Maven settings.xml"
+            env:
+              MAVEN_TOKEN: $(System.AccessToken)
+
+          # 2. Auto-update version
+          - script: |
+              VERSION="0.0.$(Build.BuildId)-SNAPSHOT"
+              echo "Updating version to $VERSION"
+              mvn versions:set -DnewVersion=$VERSION
+              mvn versions:commit
+              grep "<version>" pom.xml
+            displayName: "Set Maven Version Dynamically"
+
+          # 3. Deploy to Azure Artifacts
+          - task: Maven@4
+            displayName: "Deploy Maven Artifacts"
+            inputs:
+              mavenPomFile: "pom.xml"
+              goals: "deploy"
+              publishJUnitResults: true
+              testResultsFiles: "**/surefire-reports/TEST-*.xml"
+              javaHomeOption: "JDKVersion"
+              mavenVersionOption: "Default"
+              mavenAuthenticateFeed: false

@@ -1,0 +1,130 @@
+# Starter pipeline
+trigger:
+  - none
+
+pool:
+  name: nakodtech
+  demands:
+    - agent.name -equals Agent-1
+
+stages:
+  - stage: compile
+    displayName: "Maven Compile"
+    jobs:
+      - job: maven_compile
+        steps:
+          - task: Maven@4
+            inputs:
+              azureSubscription: "svcp-conn"
+              mavenPomFile: "pom.xml"
+              goals: "compile"
+              publishJUnitResults: true
+              testResultsFiles: "**/surefire-reports/TEST-*.xml"
+              javaHomeOption: "JDKVersion"
+              mavenVersionOption: "Default"
+              mavenAuthenticateFeed: false
+              effectivePomSkip: false
+              sonarQubeRunAnalysis: false
+
+  - stage: test
+    displayName: "Maven Test"
+    jobs:
+      - job: maven_test
+        steps:
+          - task: Maven@4
+            inputs:
+              azureSubscription: "svcp-conn"
+              mavenPomFile: "pom.xml"
+              goals: "test"
+              publishJUnitResults: true
+              testResultsFiles: "**/surefire-reports/TEST-*.xml"
+              javaHomeOption: "JDKVersion"
+              mavenVersionOption: "Default"
+              mavenAuthenticateFeed: false
+              effectivePomSkip: false
+              sonarQubeRunAnalysis: false
+
+  - stage: trivy_fs_scan
+    displayName: "Trivy Fs Scan"
+    jobs:
+      - job: trivy_scan_job
+        displayName: "Trivy Fs Scan Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - task: CmdLine@2
+            inputs:
+              script: "trivy fs --format table -o trivy-fs-report.txt ."
+
+  - stage: build
+    displayName: "Build Jar Stage"
+    jobs:
+      - job: build_job
+        displayName: "Build or Package Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - script: mvn package
+            displayName: "package app"
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: "target"
+              artifactName: "drop"
+            displayName: "Publish JAR Artifact"
+
+  - stage: docker_build
+    displayName: "Docker Build"
+    jobs:
+      - job: build_job
+        displayName: "Build Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              artifactName: "drop"
+              downloadPath: "$(Build.SourcesDirectory)"
+            displayName: "Download JAR Artifact"
+          - task: Docker@2
+            inputs:
+              containerRegistry: "container-rg"
+              repository: "bankapp"
+              command: "build"
+              Dockerfile: "**/Dockerfile"
+              tags: "latest"
+
+  - stage: trivy_image_scan
+    displayName: "Run Trivy Image Scan"
+    jobs:
+      - job: trivy_image_scan_job
+        displayName: "Trivy Image Scan Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - script: "trivy image --format table -o trivy-image-report.txt nakodtchcr.azurecr.io/bankapp:latest"
+            displayName: "Trivy Image Scan Job"
+
+  - stage: docker_push
+    displayName: "Docker Push"
+    jobs:
+      - job: push_job
+        displayName: "Push Job"
+        pool:
+          name: nakodtech
+          demands:
+            - agent.name -equals Agent-1
+        steps:
+          - task: Docker@2
+            inputs:
+              containerRegistry: "container-rg"
+              repository: "bankapp"
+              command: "push"
+              tags: "latest"
