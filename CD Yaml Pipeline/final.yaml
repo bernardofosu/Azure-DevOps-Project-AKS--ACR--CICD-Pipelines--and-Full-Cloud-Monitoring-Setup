@@ -104,11 +104,11 @@ stages:
               artifactName: "drop"
             displayName: "Publish JAR Artifact"
 
-  - stage: docker_build_push
+  - stage: docker_push
     displayName: "Docker Build Push"
     jobs:
-      - job: build_push_job
-        displayName: "Build and Push Job"
+      - job: push_job
+        displayName: "Push Job"
         pool:
           name: nakodtech
           demands:
